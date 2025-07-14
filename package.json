@@ -1,0 +1,12 @@
+{
+  "name": "invoicescraper90",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "puppeteer": "^24.10.1",
+    "express": "^5.1.0",
+    "body-parser": "^2.2.0"
+  }
+}
