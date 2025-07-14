@@ -1,5 +1,5 @@
 {
-  "name": "invoicescraper90",
+  "name": "invoicing90",
   "version": "1.0.0",
   "scripts": {
     "start": "node index.js"
