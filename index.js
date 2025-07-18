@@ -18,7 +18,6 @@ app.post('/send-emails', async (req, res) => {
   });
 
   let result = {};
-
   try {
     const page = await browser.newPage();
 
@@ -30,6 +29,7 @@ app.post('/send-emails', async (req, res) => {
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
     const url = invoiceUrls[0];
+
     try {
       console.log(`📨 Opening invoice: ${url}`);
       await page.goto(url, { waitUntil: 'networkidle2' });
@@ -44,26 +44,27 @@ app.post('/send-emails', async (req, res) => {
       });
       console.log(`💵 Job Total Due: ${jobTotalDue}`);
 
-      let jobNumber, jobUrl;
-      const jobInfo = await page.evaluate(() => {
+      let jobNumber, jobUrl, billingContact;
+
+      const extractInfo = await page.evaluate(() => {
         const jobLink = document.querySelector('a[href^="/jobs/jobView"]');
-        if (jobLink) {
-          return {
-            number: jobLink.textContent.trim(),
-            href: jobLink.href
-          };
-        }
-        return null;
+        const billTo = Array.from(document.querySelectorAll('.invoice-to'))
+          .map(div => div.textContent.trim())
+          .find(text => text.includes('@'));
+        return {
+          number: jobLink?.textContent.trim() || null,
+          href: jobLink?.href || null,
+          billingEmail: billTo ? (billTo.match(/\S+@\S+/) || [])[0] : null
+        };
       });
 
-      if (jobInfo) {
-        jobNumber = jobInfo.number;
-        jobUrl = jobInfo.href;
-        console.log(`🔢 Job Number: ${jobNumber}`);
-        console.log(`🔗 Job URL: ${jobUrl}`);
-      } else {
-        console.log('⚠️ Job Number not found.');
-      }
+      jobNumber = extractInfo.number;
+      jobUrl = extractInfo.href;
+      billingContact = extractInfo.billingEmail;
+
+      if (jobNumber) console.log(`🔢 Job Number: ${jobNumber}`);
+      if (jobUrl) console.log(`🔗 Job URL: ${jobUrl}`);
+      if (billingContact) console.log(`📧 Billing Contact: ${billingContact}`);
 
       let hasLateFee = false;
       if (jobUrl) {
@@ -71,7 +72,7 @@ app.post('/send-emails', async (req, res) => {
 
         hasLateFee = await page.evaluate(() => {
           const serviceNames = Array.from(document.querySelectorAll('dl dt')).map(dt => dt.textContent.trim());
-          return serviceNames.includes('Late Fee');
+          return serviceNames.some(name => name.toLowerCase() === 'late fee');
         });
 
         console.log(hasLateFee ? '⚠️ Late Fee detected.' : '✅ No Late Fee, proceed as normal.');
@@ -125,24 +126,19 @@ app.post('/send-emails', async (req, res) => {
 
             await page.evaluate((rateSel, fee) => {
               const input = document.querySelector(rateSel);
-              if (input) {
-                input.value = fee;
-              }
+              if (input) input.value = fee;
             }, rateSelector, lateFee);
             console.log(`💰 Set Late Fee = 10% of Job Total Due = ${lateFee}`);
 
-            // ✍️ Rename "Fee" to "Late Fee"
             await page.evaluate((nameSel) => {
               const input = document.querySelector(nameSel);
               if (input) input.value = 'Late Fee';
             }, nameSelector);
             console.log('✏️ Renamed "Fee" to "Late Fee"');
 
-            // 💾 Click Save Job
             await page.click('#createjob');
             console.log('💾 Clicked Save Job');
 
-            // 🧾 Handle modal if it appears
             try {
               await page.waitForSelector('button.jquery-msgbox-button-submit', { timeout: 3000 });
               const modalButtons = await page.$$('button.jquery-msgbox-button-submit');
@@ -154,50 +150,54 @@ app.post('/send-emails', async (req, res) => {
                   break;
                 }
               }
-            } catch (modalErr) {
+            } catch {
               console.log('ℹ️ No modal appeared after save.');
             }
 
             await new Promise(resolve => setTimeout(resolve, 2000));
-          } else {
-            console.log('⚠️ Failed to locate Fee row.');
           }
-
-          await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
         await page.goto(url, { waitUntil: 'networkidle2' });
       }
 
+      // Open Email Modal
       await page.waitForSelector('a.btn[onclick^="showEmailInvoice"]', { timeout: 10000 });
       await page.click('a.btn[onclick^="showEmailInvoice"]');
-      await page.waitForSelector('#email-modal', { visible: true });
+      await page.waitForSelector('#email-modal', { visible: true, timeout: 10000 });
 
-      try {
-        await page.waitForSelector('button.dropdown-toggle[data-toggle="dropdown"]', { visible: true });
-        await page.click('button.dropdown-toggle[data-toggle="dropdown"]');
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      // 🎯 Focus "To" field
+	await page.waitForSelector('.select2-choices', { visible: true });
+	await page.click('.select2-choices');
+	await new Promise(resolve => setTimeout(resolve, 500));
 
-        const contactClicked = await page.evaluate(() => {
-          const links = Array.from(document.querySelectorAll('ul.customer-other-contacts li:not(.disabled) a'))
-            .filter(a => a.getAttribute('onclick')?.includes('setemails'));
-          if (links.length > 0) {
-            links[0].click();
-            return true;
-          }
-          return false;
-        });
+	// 🧹 Remove existing contact pills
+	const closeButtons = await page.$$('.select2-search-choice-close');
+	for (const btn of closeButtons) {
+  	try {
+   	 await btn.click();
+   	 await new Promise(resolve => setTimeout(resolve, 100));
+ 	 } catch (err) {
+   	 console.log('⚠️ Could not click close button:', err.message);
+  	}
+	}
 
-        console.log(contactClicked ? '✅ Selected Other Contact.' : 'ℹ️ No Other Contact.');
-      } catch {
-        console.log('ℹ️ Other Contact dropdown not available.');
-      }
+	// 🧹 Spam backspace as fallback
+	await page.click('.select2-search-field input');
+	for (let i = 0; i < 30; i++) {
+  	await page.keyboard.press('Backspace');
+  	await new Promise(resolve => setTimeout(resolve, 30));
+	}
 
-      const contactEmails = await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('ul.select2-choices li.select2-search-choice div'))
-          .map(div => div.textContent.trim());
-      });
+	// ➕ Type in new billing contact
+	await page.waitForSelector('.select2-search-field input', { visible: true });
+	if (billingContact) {
+ 	await page.type('.select2-search-field input', billingContact);
+ 	 await page.keyboard.press('Enter');
+  	console.log(`📧 Entered Billing Contact: ${billingContact}`);
+	}
 
+      // Choose Email Template
       const templateName = '61 Days Past Due';
       await page.waitForSelector('#s2id_customForms .select2-choice', { visible: true });
       await page.click('#s2id_customForms .select2-choice');
@@ -206,6 +206,7 @@ app.post('/send-emails', async (req, res) => {
       await page.keyboard.press('Enter');
       console.log(`✅ Selected template: ${templateName}`);
 
+      // Send Email
       await new Promise(resolve => setTimeout(resolve, 2000));
       await page.waitForSelector('#btn-load-then-complete', { visible: true });
       await page.click('#btn-load-then-complete');
@@ -216,13 +217,9 @@ app.post('/send-emails', async (req, res) => {
         success: true,
         sent: 1,
         invoice: url,
-        jobNumber: jobNumber || 'Not Found'
+        jobNumber: jobNumber || 'Not Found',
+        billingEmail: billingContact
       };
-
-      contactEmails.forEach((email, i) => {
-        result[`contact_${i + 1}`] = email;
-        console.log(`📬 contact_${i + 1}: ${email}`);
-      });
 
     } catch (err) {
       console.error(`❌ Failed on invoice ${url}:`, err.message);
