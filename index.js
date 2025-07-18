@@ -197,14 +197,30 @@ app.post('/send-emails', async (req, res) => {
   	console.log(`📧 Entered Billing Contact: ${billingContact}`);
 	}
 
-      // Choose Email Template
-      const templateName = '61 Days Past Due';
-      await page.waitForSelector('#s2id_customForms .select2-choice', { visible: true });
-      await page.click('#s2id_customForms .select2-choice');
-      await page.waitForSelector('.select2-drop-active .select2-search input', { visible: true });
-      await page.type('.select2-drop-active .select2-search input', templateName);
-      await page.keyboard.press('Enter');
-      console.log(`✅ Selected template: ${templateName}`);
+      // Choose Email Template (HEADLESS-PROOF)
+	const templateName = '61 Days Past Due';
+	await page.waitForSelector('#s2id_customForms .select2-choice', { visible: true });
+
+	// Force open the dropdown via real browser event
+	await page.evaluate(() => {
+  	const dropdown = document.querySelector('#s2id_customForms .select2-choice');
+  	if (dropdown) {
+    	dropdown.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  	}
+	});
+	await new Promise(resolve => setTimeout(resolve, 500));
+
+	// Type into the floating dropdown
+	await page.evaluate((template) => {
+  	const input = document.querySelector('.select2-drop-active input.select2-input');
+  	if (input) {
+    	input.value = template;
+    	input.dispatchEvent(new Event('input', { bubbles: true }));
+  	}
+	}, templateName);
+
+	await page.keyboard.press('Enter');
+	console.log(`✅ Selected template: ${templateName}`);
 
       // Send Email
       await new Promise(resolve => setTimeout(resolve, 2000));
